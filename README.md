@@ -17,7 +17,7 @@ This script uses dialog to create menus so will check and install needed package
 
 ### Database
 
-The database file is a simple text file, using comma separated values. Feel free to create your own or via GUI or with the following schema
+The database file is a simple text file, using tab separated values. Feel free to create your own or via GUI or with the following schema
 
 |HOST NAME|ALIAS|HOSTNAME or IP|SSH PORT|USER|
 |:-------:|:---:|:------------:|:------:|:--:|
