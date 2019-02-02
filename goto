@@ -1,0 +1,276 @@
+#!/bin/bash
+
+############################
+# User Configuration
+############################
+USER="myuser"
+SSH_KEY="~/.ssh/id_rsa"
+DB_FILE="~/scripts/goto.db"
+SCRIPT_FILE="~/scripts/goto"
+
+# OS can be: "archlinux", "manjaro", "debian", "ubuntu"
+OS="debian"
+
+############################
+# Version / Info
+############################
+VERSION="2.10"
+COMPANY="mycompany"
+
+############################
+# Fixed  Configuration
+# ~ do not edit bellow ~
+############################
+BACKTITLE="GoTo SSH v$VERSION, $COMPANY edition"
+TMP_DB="/tmp/goto.tmp"
+
+############################
+# Init Function
+############################
+f_init() {
+  # check DB file
+  if [ ! -f $DB_FILE ]; then
+    touch $DB_FILE
+  fi
+
+  # check USER
+  if [ -z $USER ]; then
+    echo "No User is defined...you need to configure this script first"
+  fi
+
+  # check SSH key
+  if [ -z $SSH_KEY ]; then
+    SSH_COMMAND="/usr/bin/ssh"
+  else
+    SSH_COMMAND="/usr/bin/ssh -i $SSH_KEY"
+  fi
+
+  # OS Check
+  if [ $OS == "archlinux" ] || [ $OS == "manjaro" ]; then
+    PKGMNG="sudo pacman -S"
+  elif [ $OS == "debian" ] || [ $OS == "ubuntu" ]; then
+    PKGMNG="sudo apt-get install"
+  fi
+
+  # check if required deps are installed
+  if [ ! -f "/usr/bin/dialog" ]; then
+    $PKGMNG dialog
+  fi
+  if [ ! -f "/usr/bin/curl" ]; then
+    $PKGMNG curl
+  fi
+  if [ ! -f "/usr/bin/xclip" ]; then
+    $PKGMNG xclip
+  fi
+}
+
+############################
+# What is my IP?
+############################
+f_whatismyip() {
+  FIND_MY_IP=$(curl -s ipinfo.io/ip)
+  dialog --backtitle "$BACKTITLE" --title "What is my IP?" --nocancel --msgbox "Current IP is: $FIND_MY_IP" 8 40
+  echo $FIND_MY_IP | xclip -selection c
+
+  # return
+  f_menu
+}
+
+############################
+# Fetch Hosts
+############################
+f_fetch_hosts() {
+  unset HOST_NAME
+  unset HOST_ALIAS
+  unset HOST_HOSTNAME
+  unset HOST_PORT
+  unset HOST_USER
+  i=0
+  sort $DB_FILE > $TMP_DB
+  while read line; do
+    HOSTS[$i]=$line
+    let i++
+  done < $TMP_DB
+  c=0
+  i=1
+  for field in ${HOSTS[@]}; do
+    if [ $c == 0 ]; then
+      HOST_NAME[$i]=$field
+      let c++
+    elif [ $c == 1 ]; then
+      HOST_ALIAS[$i]=$field
+      let c++
+    elif [ $c == 2 ]; then
+      HOST_HOSTNAME[$i]=$field
+      let c++
+    elif [ $c == 3 ]; then
+      HOST_PORT[$i]=$field
+      let c++
+    elif [ $c == 4 ]; then
+      HOST_USER[$i]=$field
+      c=0
+      let i++
+    fi
+  done
+}
+
+############################
+# Populate Hosts List
+############################
+f_populate_hosts() {
+  HOST_LIST=""
+  COUNT=1
+  # Populate Dialog
+  for host in ${HOST_NAME[@]}; do
+    HOST_LIST="$HOST_LIST $host $COUNT off"
+    COUNT=$[COUNT+1]
+  done
+  echo $HOST_LIST
+  HOST_TARGET=$(/usr/bin/dialog --stdout --backtitle "$BACKTITLE" --title "Available Hosts" --radiolist 'Choose Host to connect:' 40 70 38 $HOST_LIST)
+  f_get_index
+  clear
+  f_goto_host
+  clear
+  f_menu
+}
+
+############################
+# Delete Host
+############################
+f_delete_host() {
+  HOST_LIST=""
+  COUNT=1
+  # Populate Dialog
+  for host in ${HOST_NAME[@]}; do
+    HOST_LIST="$HOST_LIST $host $COUNT off"
+    COUNT=$[COUNT+1]
+  done
+  echo $HOST_LIST
+  HOST_TARGET=$(/usr/bin/dialog --stdout --backtitle "$BACKTITLE" --title "Available Hosts" --radiolist 'Choose Host to connect:' 40 70 38 $HOST_LIST)
+  clear
+  f_get_index
+  sed -i "${HOST_ID}d" $DB_FILE
+  f_fetch_hosts
+  f_menu
+}
+
+############################
+# Get Index
+############################
+f_get_index() {
+  HOST_ID=0
+  HOST_FOUND="n"
+  f_get_index_name
+  if [ $HOST_FOUND = "n" ]; then
+    HOST_ID=0
+    f_get_index_alias
+  fi
+  if [ $HOST_FOUND = "n" ]; then
+    echo "Host ID not found!"
+    f_menu
+  else
+    let HOST_ID++
+  fi
+}
+f_get_index_name() {
+  for host in ${HOST_NAME[@]}; do
+    if [[ $host == $HOST_TARGET ]]; then
+      HOST_FOUND="y"
+      break;
+    fi
+    let HOST_ID++
+  done
+}
+f_get_index_alias() {
+  for host in ${HOST_ALIAS[@]}; do
+    if [[ $host == $HOST_TARGET ]]; then
+      HOST_FOUND="y"
+      break;
+    fi
+    let HOST_ID++
+  done
+}
+
+############################
+# Add New Host
+############################
+f_add_host() {
+  NH_NAME=$(dialog --backtitle "$BACKTITLE" --title "New Host Name" --inputbox "Enter the name of the Host:" 8 40 3>&1 1>&2 2>&3 3>&-)
+  NH_ALIAS=$(dialog --backtitle "$BACKTITLE" --title "New Host Alias" --inputbox "Enter the alias of the Host:" 8 40 3>&1 1>&2 2>&3 3>&-)
+  NH_HOSTNAME=$(dialog --backtitle "$BACKTITLE" --title "New Host Hostname" --inputbox "Enter one FQDN Hostname for the Host or IP ADDRESS:" 8 40 3>&1 1>&2 2>&3 3>&-)
+  NH_PORT=$(dialog --backtitle "$BACKTITLE" --title "New Host SSH Port" --inputbox "Enter SSH Port for Host or press Enter for default (22):" 8 40 3>&1 1>&2 2>&3 3>&-)
+  NH_USER=$(dialog --backtitle "$BACKTITLE" --title "New Host User" --inputbox "Connect As user [u] to this Host or as root [r] (input u or r)?" 8 40 3>&1 1>&2 2>&3 3>&-)
+  if [ -z $NH_NAME ] || [ -z $NH_HOSTNAME ] || [ -z $NH_ALIAS ] [ -z $NH_USER ]; then
+    dialog --backtitle "$BACKTITLE" --title "Error" --nocancel --msgbox "Missing Information!" 8 40
+    f_menu
+  elif [ -z $NH_PORT ]; then
+    NH_PORT="22"
+  fi
+  if [ $NH_USER neq "u" ] || [ $NH_USER neq "r" ]; then
+    dialog --backtitle "$BACKTITLE" --title "Error" --nocancel --msgbox "User must be u or r!" 8 40
+    f_menu
+  fi
+  echo -e "$NH_NAME\t$NH_ALIAS\t$NH_HOSTNAME\t$NH_PORT\t$NH_USER" >> $DB_FILE
+  f_fetch_hosts
+  f_menu
+}
+
+############################
+# Goto New Host
+############################
+f_goto_host() {
+  if [[ ${HOST_USER[$HOST_ID]} == "u" ]]; then
+    $SSH_COMMAND -p ${HOST_PORT[$HOST_ID]} $USER@${HOST_HOSTNAME[$HOST_ID]}
+  elif [[ ${HOST_USER[$HOST_ID]} == "r" ]]; then
+    $SSH_COMMAND -p ${HOST_PORT[$HOST_ID]} root@${HOST_HOSTNAME[$HOST_ID]}
+  else
+    echo "Host not found in $DB_FILE!"
+    exit 1
+  fi
+}
+############################
+# Main Menu
+############################
+f_menu() {
+  OPTIONS=(1 "SSH to a Host"
+           2 "Add a new Host"
+           3 "Delete a Host"
+           4 "Refresh Hosts List"
+           5 "What is my IP?"
+           Q "Quit")
+
+  CHOICE=$(dialog --clear --backtitle "$BACKTITLE" --title "Main Menu" --nocancel --menu "Select an action:" 13 30 6 "${OPTIONS[@]}" 2>&1 >/dev/tty)
+  clear
+  case $CHOICE in
+    1) f_populate_hosts;;
+    2) f_add_host;;
+    3) f_delete_host;;
+    4) f_fetch_hosts && f_menu;;
+    5) f_whatismyip;;
+    Q) exit 0;;
+  esac
+}
+
+############################
+# Start Script
+############################
+f_init
+if [ -s $DB_FILE ]; then
+  f_fetch_hosts
+fi
+if [ -z $@ ]; then
+  f_menu
+elif [ $1 = "-e" ]; then
+  nano $SCRIPT_FILE
+elif [ $1 = "-h" ]; then
+  echo "Goto SSH Script v$VERSION"
+  echo ""
+  echo "goto -e : edit this script"
+  echo "goto <host> : connect to host"
+  echo "goto : show gui and options"
+else
+  HOST_TARGET=$1
+  f_get_index
+  clear
+  f_goto_host
+fi
